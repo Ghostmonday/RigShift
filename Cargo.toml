@@ -1,0 +1,17 @@
+[package]
+name = "rigshift"
+version = "1.0.0"
+edition = "2021"
+description = "Windows system optimization CLI tool"
+authors = ["RigShift"]
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+
+[package.metadata.winpackage]
+product_name = "RigShift"
