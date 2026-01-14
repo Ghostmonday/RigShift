@@ -1,21 +1,45 @@
-//! RigShift v1.0.0 - Windows System Optimization CLI Tool
+//! RigShift v2.0.0 - Complete Windows System Optimization CLI Tool
 //!
-//! A command-line utility for scanning and cleaning temporary files
-//! and browser caches on Windows systems.
+//! A comprehensive command-line utility for optimizing Windows systems
+//! including registry cleaning, startup management, service optimization,
+//! large file finding, uninstallation, and privacy protection.
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process;
 
-use crate::engine::Engine;
-use crate::scanner::{FileType, Scanner};
+// Local modules
+mod checkpoint;
+mod engine;
+mod scanner;
+
+// New feature modules
+mod registry;
+mod startup;
+mod services;
+mod large_files;
+mod uninstaller;
+mod privacy;
+
+// Re-export for use in commands
+use checkpoint::{Checkpoint, CheckpointManager};
+use engine::{Engine, ApplyResult, UndoResult};
+use scanner::{FileType, Scanner, ScanResult};
+
+// New feature exports
+use registry::{RegistryScanner, RegistryCleaner, RegistryScanResult, RegistryCleanupResult};
+use startup::{StartupManager, StartupScanResult, StartupModifyResult};
+use services::{ServiceOptimizer, ServiceScanResult, ServiceModifyResult};
+use large_files::{LargeFileFinder, LargeFileScanResult, FileCategory};
+use uninstaller::{Uninstaller, ProgramScanResult, LeftoverAnalysis};
+use privacy::{PrivacyManager, PrivacyScanResult, PrivacyApplyResult};
 
 /// The main CLI struct parsed by clap
 #[derive(Parser)]
 #[command(name = "rigshift")]
 #[command(author = "RigShift")]
-#[command(version = "1.0.0")]
-#[command(about = "Windows system optimization CLI tool", long_about = None)]
+#[command(version = "2.0.0")]
+#[command(about = "Complete Windows System Optimization CLI Tool", long_about = None)]
 struct Cli {
     /// Enable dry-run mode (no changes are made)
     #[arg(long, global = true)]
@@ -25,6 +49,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Enable verbose output
+    #[arg(long, global = true, short = 'v')]
+    verbose: bool,
+
     /// The command to execute
     #[command(subcommand)]
     command: Commands,
@@ -33,527 +61,1208 @@ struct Cli {
 /// Available commands for RigShift
 #[derive(Subcommand)]
 enum Commands {
-    /// Scan for temporary files and browser caches
-    Scan,
+    /// Scan for issues (run without arguments for full system scan)
+    #[command(subcommand)]
+    Scan(ScanCommands),
 
-    /// Apply cleanup by deleting found files
-    Apply,
+    /// Apply cleanup and optimizations
+    #[command(subcommand)]
+    Apply(ApplyCommands),
 
-    /// Undo the last cleanup operation
-    Undo,
+    /// Undo previous operations using checkpoints
+    #[command(subcommand)]
+    Undo(UndoCommands),
 
-    /// Show system status and checkpoint information
-    Status,
+    /// Show system status and checkpoints
+    #[command(subcommand)]
+    Status(StatusCommands),
+
+    /// Registry cleaning commands
+    #[command(subcommand)]
+    Registry(RegistryCommands),
+
+    /// Startup manager commands
+    #[command(subcommand)]
+    Startup(StartupCommands),
+
+    /// Service optimization commands
+    #[command(subcommand)]
+    Services(ServicesCommands),
+
+    /// Large file finder commands
+    #[command(subcommand)]
+    LargeFiles(LargeFilesCommands),
+
+    /// Program uninstaller commands
+    #[command(subcommand)]
+    Uninstall(UninstallCommands),
+
+    /// Privacy and telemetry blocking commands
+    #[command(subcommand)]
+    Privacy(PrivacyCommands),
+
+    /// Run all optimizations (comprehensive system tune-up)
+    #[command(name = "optimize")]
+    Optimize {
+        /// Include registry cleaning (requires admin)
+        #[arg(long)]
+        registry: bool,
+
+        /// Include startup optimization
+        #[arg(long)]
+        startup: bool,
+
+        /// Include service optimization
+        #[arg(long)]
+        services: bool,
+
+        /// Include privacy blocking
+        #[arg(long)]
+        privacy: bool,
+
+        /// Create checkpoint before changes
+        #[arg(long)]
+        checkpoint: bool,
+    },
 }
 
-/// Formats a file size in human-readable format
-fn format_size(size: u64) -> String {
+/// Scan subcommands
+#[derive(Subcommand)]
+enum ScanCommands {
+    /// Scan for temporary files and browser caches (default behavior)
+    Scan,
+
+    /// Scan for registry issues
+    Registry {
+        /// Include broken uninstallers
+        #[arg(long)]
+        include_uninstallers: bool,
+
+        /// Include orphaned extensions
+        #[arg(long)]
+        include_extensions: bool,
+
+        /// Include invalid keys
+        #[arg(long)]
+        include_invalid_keys: bool,
+
+        /// Enable safe mode (recommended for first scan)
+        #[arg(long, default_value = "true")]
+        safe_mode: bool,
+    },
+
+    /// Scan for startup programs
+    Startup,
+
+    /// Scan for services
+    Services,
+
+    /// Scan for large files
+    LargeFiles {
+        /// Minimum file size (e.g., "100MB", "1GB")
+        #[arg(short, long, default_value = "100MB")]
+        min_size: String,
+
+        /// Drive to scan (default: system drive)
+        #[arg(short, long)]
+        drive: Option<String>,
+    },
+
+    /// Scan for installed programs
+    Programs,
+
+    /// Scan for privacy settings
+    Privacy,
+
+    /// Run a comprehensive system scan
+    All {
+        /// Include large file scan
+        #[arg(long)]
+        large_files: bool,
+
+        /// Include installed programs
+        #[arg(long)]
+        programs: bool,
+    },
+}
+
+/// Apply subcommands
+#[derive(Subcommand)]
+enum ApplyCommands {
+    /// Apply cleanup by deleting found files
+    Clean {
+        /// Clean temp files only
+        #[arg(long)]
+        temp_only: bool,
+
+        /// Clean browser caches only
+        #[arg(long)]
+        cache_only: bool,
+    },
+
+    /// Apply registry cleanup
+    Registry {
+        /// Include broken uninstallers
+        #[arg(long)]
+        include_uninstallers: bool,
+
+        /// Include orphaned extensions
+        #[arg(long)]
+        include_extensions: bool,
+
+        /// Create checkpoint before changes
+        #[arg(long)]
+        checkpoint: bool,
+
+        /// Force unsafe operations (not recommended)
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Disable startup programs
+    Startup {
+        /// Disable all high-impact programs
+        #[arg(long)]
+        high_impact: bool,
+
+        /// Disable specific programs by index or name
+        #[arg(short, long)]
+        disable: Vec<String>,
+
+        /// Create checkpoint before changes
+        #[arg(long)]
+        checkpoint: bool,
+    },
+
+    /// Optimize services
+    Services {
+        /// Disable safe services only
+        #[arg(long)]
+        safe_only: bool,
+
+        /// Disable all optimizable services
+        #[arg(long)]
+        all: bool,
+
+        /// Create checkpoint before changes
+        #[arg(long)]
+        checkpoint: bool,
+    },
+
+    /// Apply privacy settings
+    Privacy {
+        /// Apply only safe settings (low impact)
+        #[arg(long)]
+        safe_only: bool,
+
+        /// Apply all recommendations
+        #[arg(long)]
+        all: bool,
+
+        /// Create checkpoint before changes
+        #[arg(long)]
+        checkpoint: bool,
+    },
+
+    /// Remove large files (requires confirmation)
+    LargeFiles {
+        /// Delete files without confirmation (dangerous!)
+        #[arg(long)]
+        force: bool,
+
+        /// Minimum file size to delete
+        #[arg(short, long, default_value = "100MB")]
+        min_size: String,
+    },
+}
+
+/// Undo subcommands
+#[derive(Subcommand)]
+enum UndoCommands {
+    /// Undo the last operation
+    Last {
+        /// Show what would be restored without actually restoring
+        #[arg(long)]
+        preview: bool,
+    },
+
+    /// Undo using a specific checkpoint
+    Checkpoint {
+        /// Path to checkpoint file
+        checkpoint: PathBuf,
+    },
+
+    /// List available checkpoints
+    List,
+}
+
+/// Status subcommands
+#[derive(Subcommand)]
+enum StatusCommands {
+    /// Show overall system status
+    System,
+
+    /// Show checkpoint status
+    Checkpoints,
+
+    /// Show temp file statistics
+    Temp,
+
+    /// Show startup items
+    Startup,
+
+    /// Show service status
+    Services,
+
+    /// Show privacy status
+    Privacy,
+}
+
+/// Registry subcommands
+#[derive(Subcommand)]
+enum RegistryCommands {
+    /// Scan for registry issues
+    Scan {
+        /// Include broken uninstallers
+        #[arg(long)]
+        include_uninstallers: bool,
+
+        /// Include orphaned extensions
+        #[arg(long)]
+        include_extensions: bool,
+
+        /// Enable safe mode
+        #[arg(long, default_value = "true")]
+        safe_mode: bool,
+    },
+
+    /// Clean registry issues
+    Clean {
+        /// Create checkpoint before cleaning
+        #[arg(long)]
+        checkpoint: bool,
+
+        /// Include specific finding types
+        #[arg(long)]
+        include_uninstallers: bool,
+
+        #[arg(long)]
+        include_extensions: bool,
+    },
+
+    /// Show registry backup/recovery options
+    Backup,
+}
+
+/// Startup subcommands
+#[derive(Subcommand)]
+enum StartupCommands {
+    /// Scan for startup programs
+    Scan,
+
+    /// List startup programs
+    List,
+
+    /// Disable startup programs
+    Disable {
+        /// Disable high-impact programs
+        #[arg(long)]
+        high_impact: bool,
+
+        /// Disable all non-essential programs
+        #[arg(long)]
+        all: bool,
+
+        /// Program name or index to disable
+        #[arg(short, long)]
+        program: Vec<String>,
+    },
+
+    /// Enable disabled startup programs
+    Enable {
+        /// Enable specific program
+        #[arg(short, long)]
+        program: Vec<String>,
+    },
+}
+
+/// Services subcommands
+#[derive(Subcommand)]
+enum ServicesCommands {
+    /// Scan services
+    Scan,
+
+    /// List optimizable services
+    List,
+
+    /// Disable services
+    Disable {
+        /// Disable safe services only
+        #[arg(long)]
+        safe: bool,
+
+        /// Disable all optimizable services
+        #[arg(long)]
+        all: bool,
+
+        /// Service name to disable
+        #[arg(short, long)]
+        service: Vec<String>,
+    },
+
+    /// Show service details
+    Info {
+        /// Service name
+        name: String,
+    },
+}
+
+/// Large Files subcommands
+#[derive(Subcommand)]
+enum LargeFilesCommands {
+    /// Scan for large files
+    Scan {
+        /// Minimum file size
+        #[arg(short, long, default_value = "100MB")]
+        min_size: String,
+
+        /// Drive to scan
+        #[arg(short, long)]
+        drive: Option<String>,
+
+        /// Include video files
+        #[arg(long)]
+        video: bool,
+
+        /// Include disk images
+        #[arg(long)]
+        images: bool,
+
+        /// Include archives
+        #[arg(long)]
+        archives: bool,
+
+        /// Include game files
+        #[arg(long)]
+        games: bool,
+    },
+
+    /// Show largest files
+    Largest {
+        /// Number of files to show
+        #[arg(short, long, default_value = "20")]
+        count: usize,
+    },
+
+    /// Show oldest files
+    Oldest {
+        /// Minimum age in days
+        #[arg(short, long, default_value = "30")]
+        days: usize,
+    },
+}
+
+/// Uninstall subcommands
+#[derive(Subcommand)]
+enum UninstallCommands {
+    /// List installed programs
+    List,
+
+    /// Scan for programs
+    Scan,
+
+    /// Analyze leftovers after uninstall
+    Leftovers {
+        /// Program name to analyze
+        program: String,
+    },
+
+    /// Remove leftovers
+    Clean {
+        /// Remove all safe leftovers
+        #[arg(long)]
+        all: bool,
+
+        /// Remove specific leftovers
+        #[arg(short, long)]
+        remove: Vec<String>,
+    },
+}
+
+/// Privacy subcommands
+#[derive(Subcommand)]
+enum PrivacyCommands {
+    /// Scan privacy settings
+    Scan,
+
+    /// Show privacy score
+    Score,
+
+    /// Apply privacy settings
+    Apply {
+        /// Apply only safe settings
+        #[arg(long)]
+        safe: bool,
+
+        /// Apply all recommendations
+        #[arg(long)]
+        all: bool,
+
+        /// Create checkpoint first
+        #[arg(long)]
+        checkpoint: bool,
+    },
+
+    /// List telemetry services
+    Services,
+}
+
+/// Format bytes to human-readable string
+fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
 
-    if size >= GB {
-        format!("{:.2} GB", size as f64 / GB as f64)
-    } else if size >= MB {
-        format!("{:.2} MB", size as f64 / MB as f64)
-    } else if size >= KB {
-        format!("{:.2} KB", size as f64 / KB as f64)
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", size)
+        format!("{} B", bytes)
     }
 }
 
-/// Formats a category name for display
-fn format_category(category: &FileType) -> String {
+/// Format file category
+fn format_category(category: &FileCategory) -> String {
     match category {
-        FileType::Temp => "Temporary Files".to_string(),
-        FileType::ChromeCache => "Chrome Cache".to_string(),
-        FileType::EdgeCache => "Edge Cache".to_string(),
-        FileType::FirefoxCache => "Firefox Cache".to_string(),
+        FileCategory::Video => "Video".to_string(),
+        FileCategory::Audio => "Audio".to_string(),
+        FileCategory::DiskImage => "Disk Image".to_string(),
+        FileCategory::Archive => "Archive".to_string(),
+        FileCategory::Installer => "Installer".to_string(),
+        FileCategory::GameFiles => "Game Files".to_string(),
+        FileCategory::Database => "Database".to_string(),
+        FileCategory::Document => "Document".to_string(),
+        FileCategory::Image => "Image".to_string(),
+        FileCategory::Other => "Other".to_string(),
     }
 }
 
-/// Escapes a string for JSON output
-fn escape_json_string(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => result.push_str("\\\""),
-            '\\' => result.push_str("\\\\"),
-            '\n' => result.push_str("\\n"),
-            '\r' => result.push_str("\\r"),
-            '\t' => result.push_str("\\t"),
-            c => result.push(c),
-        }
-    }
-    result
-}
+/// Handle scan commands
+fn handle_scan(cli: &Cli, scan_cmd: &ScanCommands, verbose: bool) {
+    match scan_cmd {
+        ScanCommands::Scan {} => {
+            let scanner = Scanner::new();
+            let results = scanner.scan();
 
-/// Handles the scan command
-fn handle_scan(scanner: &Scanner, _dry_run: bool, json: bool) {
-    let scan_result = scanner.scan();
-
-    if json {
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("{".to_string());
-        lines.push("  \"command\": \"scan\",".to_string());
-        lines.push("  \"success\": true,".to_string());
-        lines.push(format!("  \"file_count\": {},", scan_result.len()));
-
-        let total_size = Scanner::calculate_total_size(&scan_result);
-        lines.push(format!("  \"total_size\": {},", total_size));
-        lines.push(format!(
-            "  \"total_size_human\": \"{}\",",
-            format_size(total_size).replace('"', "\\\"")
-        ));
-        lines.push("  \"files\": [".to_string());
-
-        for (i, file) in scan_result.iter().enumerate() {
-            lines.push("    {".to_string());
-            lines.push(format!(
-                "      \"path\": \"{}\",",
-                escape_json_string(&file.file_path.to_string_lossy())
-            ));
-            lines.push(format!("      \"size\": {},", file.file_size));
-            lines.push(format!(
-                "      \"size_human\": \"{}\",",
-                format_size(file.file_size).replace('"', "\\\"")
-            ));
-            lines.push(format!(
-                "      \"category\": \"{}\"",
-                escape_json_string(&format_category(&file.file_type))
-            ));
-            lines.push("    }".to_string());
-            if i < scan_result.len() - 1 {
-                lines.last_mut().unwrap().push(',');
-            }
-        }
-
-        lines.push("  ]".to_string());
-        lines.push("}".to_string());
-
-        for line in &lines {
-            println!("{}", line);
-        }
-    } else {
-        println!("=== RigShift Scan Results ===");
-        println!();
-
-        if scan_result.is_empty() {
-            println!("No cleanable files found.");
-            return;
-        }
-
-        let total_size = Scanner::calculate_total_size(&scan_result);
-        println!(
-            "Found {} file(s) totaling {}",
-            scan_result.len(),
-            format_size(total_size)
-        );
-        println!();
-
-        let mut categories: Vec<(FileType, Vec<&crate::scanner::ScanResult>)> = Vec::new();
-        for file in &scan_result {
-            if let Some(existing) = categories
-                .iter_mut()
-                .find(|(cat, _)| *cat == file.file_type)
-            {
-                existing.1.push(file);
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&results).unwrap());
             } else {
-                categories.push((file.file_type.clone(), vec![file]));
-            }
-        }
+                println!("\n=== Temporary Files and Cache Scan ===");
+                println!("Files found: {}", results.len());
+                println!("Total size: {}", format_size(Scanner::calculate_total_size(&results)));
 
-        for (category, files) in categories {
-            let cat_size: u64 = files.iter().map(|f| f.file_size).sum();
-            println!("  [{}]", format_category(&category));
-            println!("    Files: {}", files.len());
-            println!("    Total: {}", format_size(cat_size));
-            println!();
-        }
+                // Group by type
+                let mut by_type: std::collections::HashMap<FileType, usize> = std::collections::HashMap::new();
+                for result in &results {
+                    *by_type.entry(result.file_type.clone()).or_insert(0) += 1;
+                }
 
-        println!("Run 'rigshift apply' to delete these files.");
-    }
-}
+                for (file_type, count) in &by_type {
+                    println!("  {:?}: {} files", file_type, count);
+                }
 
-/// Handles the apply command
-fn handle_apply(scanner: &Scanner, engine: &mut Engine, dry_run: bool, json: bool) {
-    let scan_result = scanner.scan();
-
-    if json {
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("{".to_string());
-        lines.push("  \"command\": \"apply\",".to_string());
-
-        if scan_result.is_empty() {
-            lines.push("  \"success\": true,".to_string());
-            lines.push("  \"message\": \"No files to clean\",".to_string());
-            lines.push("  \"files_scanned\": 0,".to_string());
-            lines.push("  \"files_deleted\": 0,".to_string());
-            lines.push("  \"files_skipped\": 0,".to_string());
-            lines.push("  \"bytes_freed\": 0,".to_string());
-            lines.push("  \"bytes_freed_human\": \"0 B\"".to_string());
-            lines.push("}".to_string());
-
-            for line in &lines {
-                println!("{}", line);
-            }
-            return;
-        }
-
-        let result = engine.apply(&scan_result, dry_run);
-
-        let message = if dry_run {
-            format!("[DRY-RUN] Would delete {} files", result.files_deleted)
-        } else {
-            format!("Deleted {} files", result.files_deleted)
-        };
-
-        lines.push(format!("  \"success\": {},", !result.has_errors()));
-        lines.push(format!(
-            "  \"message\": \"{}\",",
-            escape_json_string(&message)
-        ));
-        lines.push(format!("  \"files_scanned\": {},", scan_result.len()));
-        lines.push(format!("  \"files_deleted\": {},", result.files_deleted));
-        lines.push(format!("  \"files_skipped\": {},", result.files_skipped));
-        lines.push(format!("  \"bytes_freed\": {},", result.bytes_freed));
-        lines.push(format!(
-            "  \"bytes_freed_human\": \"{}\"",
-            format_size(result.bytes_freed).replace('"', "\\\"")
-        ));
-        lines.push("}".to_string());
-
-        for line in &lines {
-            println!("{}", line);
-        }
-    } else {
-        println!("=== RigShift Apply ===");
-        println!();
-
-        if scan_result.is_empty() {
-            println!("No cleanable files found.");
-            return;
-        }
-
-        let total_size = Scanner::calculate_total_size(&scan_result);
-        println!("Scanning for files...");
-        println!(
-            "Found {} file(s) totaling {}",
-            scan_result.len(),
-            format_size(total_size)
-        );
-        println!();
-
-        if dry_run {
-            println!("[DRY-RUN MODE]");
-            println!("The following actions would be performed:");
-            println!();
-
-            for file in &scan_result {
-                println!("  Delete: {}", file.file_path.display());
-            }
-
-            println!();
-            println!("Total: {} would be freed", format_size(total_size));
-        } else {
-            println!("Applying cleanup...");
-
-            let result = engine.apply(&scan_result, false);
-
-            if result.files_deleted > 0 {
-                println!("Successfully deleted {} file(s)", result.files_deleted);
-                println!("Freed {}", format_size(result.bytes_freed));
-            }
-
-            if result.files_skipped > 0 {
-                println!("Skipped {} file(s)", result.files_skipped);
-            }
-
-            if !result.errors.is_empty() {
-                println!();
-                println!("Errors:");
-                for error in &result.errors {
-                    println!("  - {}", error);
+                if verbose {
+                    println!("\nDetailed findings:");
+                    for (i, result) in results.iter().enumerate().take(20) {
+                        println!("{}. {} ({})", i + 1, result.file_path.display(), format_size(result.file_size));
+                    }
+                    if results.len() > 20 {
+                        println!("... and {} more files", results.len() - 20);
+                    }
                 }
             }
+        }
 
-            if let Some(ref checkpoint_path) = result.checkpoint_path {
-                println!();
-                println!("Checkpoint saved for undo operation.");
-                println!("Checkpoint path: {}", checkpoint_path);
+        ScanCommands::Registry { include_uninstallers, include_extensions, include_invalid_keys, safe_mode } => {
+            let mut scanner = RegistryScanner::new()
+                .with_safe_mode(*safe_mode)
+                .with_broken_uninstallers(*include_uninstallers)
+                .with_orphaned_extensions(*include_extensions);
+
+            let result = scanner.scan();
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                println!("\n=== Registry Scan Results ===");
+                println!("Invalid Keys: {}", result.invalid_keys);
+                println!("Broken Uninstallers: {}", result.broken_uninstallers);
+                println!("Orphaned Extensions: {}", result.orphaned_extensions);
+                println!("\nDetailed Findings:");
+                for (i, finding) in result.findings.iter().enumerate().take(20) {
+                    println!("{}. [{}] {}", i + 1, finding.impact.to_string().to_uppercase(), finding.key_path);
+                    println!("   {}", finding.description);
+                }
+            }
+        }
+
+        ScanCommands::Startup {} => {
+            let manager = StartupManager::new();
+            let result = manager.scan();
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                println!("\n=== Startup Programs Scan ===");
+                println!("{}", result);
+            }
+        }
+
+        ScanCommands::Services {} => {
+            let optimizer = ServiceOptimizer::new();
+            let result = optimizer.scan();
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                println!("\n=== Services Scan ===");
+                println!("{}", result);
+            }
+        }
+
+        ScanCommands::LargeFiles { min_size, drive } => {
+            let mut finder = LargeFileFinder::new();
+            let _ = finder.with_min_size_str(min_size);
+
+            let scan_path = match drive {
+                Some(d) => PathBuf::from(d),
+                None => PathBuf::from("C:\\"),
+            };
+
+            let result = finder.scan_directory(&scan_path);
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                println!("\n=== Large Files Scan ===");
+                println!("{}", result);
+            }
+        }
+
+        ScanCommands::Programs {} => {
+            let uninstaller = Uninstaller::new();
+            let result = uninstaller.scan_programs();
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                println!("\n=== Installed Programs ===");
+                println!("{}", result);
+            }
+        }
+
+        ScanCommands::Privacy {} => {
+            let mut manager = PrivacyManager::new();
+            let result = manager.scan();
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                println!("\n=== Privacy Scan Results ===");
+                println!("{}", result);
+            }
+        }
+
+        ScanCommands::All { large_files, programs } => {
+            println!("\n=== Comprehensive System Scan ===\n");
+
+            // Temp files
+            let scanner = Scanner::new();
+            let temp_results = scanner.scan();
+            println!("Temporary Files: {} ({})", temp_results.len(), format_size(Scanner::calculate_total_size(&temp_results)));
+
+            // Registry
+            let mut reg_scanner = RegistryScanner::new();
+            let reg_result = reg_scanner.scan();
+            println!("Registry Issues: {}", reg_result.findings.len());
+
+            // Startup
+            let startup_mgr = StartupManager::new();
+            let startup_result = startup_mgr.scan();
+            println!("Startup Programs: {}", startup_result.enabled_count);
+
+            // Services
+            let svc_optimizer = ServiceOptimizer::new();
+            let svc_result = svc_optimizer.scan();
+            println!("Optimizable Services: {}", svc_result.optimizable_services.len());
+
+            // Privacy
+            let mut privacy_mgr = PrivacyManager::new();
+            let privacy_result = privacy_mgr.scan();
+            println!("Privacy Score: {}/100", privacy_result.privacy_score);
+
+            if *large_files {
+                let mut finder = LargeFileFinder::new();
+                let _ = finder.with_min_size_str("100MB");
+                let lf_result = finder.scan_directory(&PathBuf::from("C:\\"));
+                println!("Large Files: {} ({})", lf_result.file_count, format_size(lf_result.total_size_bytes));
+            }
+
+            if *programs {
+                let uninstaller = Uninstaller::new();
+                let prog_result = uninstaller.scan_programs();
+                println!("Installed Programs: {}", prog_result.total_count);
             }
         }
     }
 }
 
-/// Handles the undo command
-fn handle_undo(engine: &mut Engine, dry_run: bool, json: bool) {
-    let checkpoint_result = engine.get_latest_checkpoint();
+/// Handle apply commands
+fn handle_apply(cli: &Cli, apply_cmd: &ApplyCommands) {
+    match apply_cmd {
+        ApplyCommands::Clean { temp_only, cache_only } => {
+            let mut scanner = Scanner::new();
 
-    if json {
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("{".to_string());
-        lines.push("  \"command\": \"undo\",".to_string());
-
-        let checkpoint_path: Option<PathBuf> = match checkpoint_result {
-            Ok(Some(p)) => Some(p),
-            _ => None,
-        };
-
-        if checkpoint_path.is_none() {
-            lines.push("  \"success\": true,".to_string());
-            lines.push("  \"message\": \"No checkpoints found\",".to_string());
-            lines.push("  \"files_restored\": 0,".to_string());
-            lines.push("  \"bytes_restored\": 0,".to_string());
-            lines.push("  \"bytes_restored_human\": \"0 B\"".to_string());
-            lines.push("}".to_string());
-
-            for line in &lines {
-                println!("{}", line);
+            if *temp_only {
+                scanner = scanner.with_chrome(false).with_edge(false).with_firefox(false);
             }
-            return;
+            if *cache_only {
+                scanner = scanner.with_temp(false);
+            }
+
+            let results = scanner.scan();
+
+            if cli.dry_run {
+                println!("[DRY RUN] Would delete {} files ({})", results.len(), format_size(Scanner::calculate_total_size(&results)));
+            } else {
+                let mut engine = Engine::new().unwrap();
+                engine.set_dry_run(false);
+                let result = engine.apply(&results, cli.dry_run);
+
+                println!("\n=== Cleanup Results ===");
+                println!("Files deleted: {}", result.files_deleted);
+                println!("Files skipped: {}", result.files_skipped);
+                println!("Space freed: {}", format_size(result.bytes_freed));
+
+                if let Some(path) = &result.checkpoint_path {
+                    println!("Checkpoint: {}", path);
+                }
+
+                if result.has_errors() {
+                    println!("\nErrors:");
+                    for error in &result.errors {
+                        println!("  - {}", error);
+                    }
+                }
+            }
         }
 
-        let result = if dry_run {
-            let cp = engine
-                .checkpoint_manager()
-                .load(checkpoint_path.as_ref().unwrap());
-            match cp {
-                Ok(checkpoint_data) => crate::engine::UndoResult {
-                    files_restored: checkpoint_data.len(),
-                    bytes_restored: checkpoint_data.total_size(),
-                    checkpoint_path: checkpoint_path.unwrap().to_string_lossy().to_string(),
-                    errors: Vec::new(),
-                },
-                Err(_) => crate::engine::UndoResult::new(),
+        ApplyCommands::Registry { include_uninstallers, include_extensions, checkpoint, force } => {
+            let mut scanner = RegistryScanner::new()
+                .with_safe_mode(!*force)
+                .with_broken_uninstallers(*include_uninstallers)
+                .with_orphaned_extensions(*include_extensions);
+
+            let scan_result = scanner.scan();
+
+            if cli.dry_run {
+                println!("[DRY RUN] Would clean {} registry issues", scan_result.findings.len());
+                for finding in &scan_result.findings {
+                    println!("  - {}", finding.key_path);
+                }
+            } else {
+                let cleaner = RegistryCleanup::new();
+                let safe_findings: Vec<_> = if *force {
+                    scan_result.findings.clone()
+                } else {
+                    scan_result.findings.iter().filter(|f| f.is_safe).cloned().collect()
+                };
+
+                let result = cleaner.clean(&safe_findings, *checkpoint);
+
+                println!("\n=== Registry Cleanup Results ===");
+                println!("Keys deleted: {}", result.keys_deleted);
+                println!("Keys failed: {}", result.keys_failed);
+                println!("Bytes freed (est): {}", result.bytes_freed);
+
+                if let Some(path) = &result.checkpoint_path {
+                    println!("Checkpoint: {}", path);
+                }
             }
-        } else {
-            engine.undo(checkpoint_path.as_ref().map(|p| p.as_path()), false)
-        };
-
-        let message = if dry_run {
-            format!("[DRY-RUN] Would restore {} files", result.files_restored)
-        } else {
-            format!("Restored {} file(s)", result.files_restored)
-        };
-
-        lines.push(format!("  \"success\": {},", !result.has_errors()));
-        lines.push(format!(
-            "  \"message\": \"{}\",",
-            escape_json_string(&message)
-        ));
-        lines.push(format!("  \"files_restored\": {},", result.files_restored));
-        lines.push(format!("  \"bytes_restored\": {},", result.bytes_restored));
-        lines.push(format!(
-            "  \"bytes_restored_human\": \"{}\"",
-            format_size(result.bytes_restored).replace('"', "\\\"")
-        ));
-        lines.push("}".to_string());
-
-        for line in &lines {
-            println!("{}", line);
         }
-    } else {
-        println!("=== RigShift Undo ===");
-        println!();
 
-        let checkpoint_path: Option<PathBuf> = match engine.get_latest_checkpoint() {
-            Ok(Some(p)) => Some(p),
-            _ => {
-                println!("No checkpoints found. Nothing to undo.");
+        ApplyCommands::Startup { high_impact, disable, checkpoint } => {
+            let manager = StartupManager::new();
+            let scan_result = manager.scan();
+
+            let to_disable: Vec<_> = if *high_impact {
+                manager.get_high_impact_items(&scan_result)
+            } else if !disable.is_empty() {
+                // Filter by name
+                scan_result.items.iter()
+                    .filter(|i| disable.iter().any(|d| i.name.to_lowercase().contains(&d.to_lowercase())))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            if cli.dry_run {
+                println!("[DRY RUN] Would disable {} startup programs", to_disable.len());
+                for item in &to_disable {
+                    println!("  - {}", item.name);
+                }
+            } else {
+                let result = manager.disable_multiple(&to_disable, *checkpoint);
+                println!("\n=== Startup Modification Results ===");
+                println!("Disabled: {}", result.modified_count);
+                println!("Failed: {}", result.failed_count);
+                println!("Reboot Required: {}", result.reboot_required);
+            }
+        }
+
+        ApplyCommands::Services { safe, all, checkpoint } => {
+            let optimizer = ServiceOptimizer::new();
+            let scan_result = optimizer.scan();
+
+            let to_disable = if *all {
+                optimizer.get_recommended_disable(&scan_result)
+            } else if *safe {
+                optimizer.get_safe_services(&scan_result)
+            } else {
+                Vec::new()
+            };
+
+            if cli.dry_run {
+                println!("[DRY RUN] Would disable {} services", to_disable.len());
+                for svc in &to_disable {
+                    println!("  - {}", svc.display_name);
+                }
+            } else {
+                let names: Vec<&str> = to_disable.iter().map(|s| s.name.as_str()).collect();
+                let result = optimizer.disable_multiple(&names);
+                println!("\n=== Service Modification Results ===");
+                println!("Disabled: {}", result.modified_count);
+                println!("Failed: {}", result.failed_count);
+                println!("Reboot Required: {}", result.reboot_required);
+            }
+        }
+
+        ApplyCommands::Privacy { safe_only, all, checkpoint } => {
+            let mut manager = PrivacyManager::new();
+            let scan_result = manager.scan();
+
+            if cli.dry_run {
+                let to_apply = if *all {
+                    scan_result.needs_attention.clone()
+                } else if *safe_only {
+                    scan_result.needs_attention.iter()
+                        .filter(|s| s.impact == privacy::PrivacyImpact::None || s.impact == privacy::PrivacyImpact::Low)
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                println!("[DRY RUN] Would apply {} privacy settings", to_apply.len());
+            } else {
+                let result = if *all {
+                    manager.apply_all_recommended(*checkpoint)
+                } else if *safe_only {
+                    manager.apply_safe_settings(*checkpoint)
+                } else {
+                    PrivacyApplyResult::default()
+                };
+
+                println!("\n=== Privacy Settings Applied ===");
+                println!("Changed: {}", result.changed_count);
+                println!("Failed: {}", result.failed_count);
+                println!("Reboot Required: {}", result.reboot_required);
+            }
+        }
+
+        ApplyCommands::LargeFiles { force, min_size } => {
+            if !*force {
+                println!("This command requires --force to delete files. Use --dry-run to preview first.");
                 return;
             }
-        };
 
-        if dry_run {
-            println!("[DRY-RUN MODE]");
-            println!("The following actions would be performed:");
-            println!();
+            let mut finder = LargeFileFinder::new();
+            let _ = finder.with_min_size_str(min_size);
 
-            let cp = engine
-                .checkpoint_manager()
-                .load(checkpoint_path.as_ref().unwrap());
-            match cp {
-                Ok(checkpoint_data) => {
-                    println!("  Restore {} file(s)", checkpoint_data.len());
-                    println!(
-                        "  Total size: {}",
-                        format_size(checkpoint_data.total_size())
-                    );
-                    println!();
-                    println!("Files to restore:");
-                    for entry in &checkpoint_data.entries {
-                        println!("  {}", entry.path.display());
+            let result = finder.scan_directory(&PathBuf::from("C:\\"));
+
+            println!("\n=== Large Files Deletion ===");
+            println!("Found {} large files", result.files.len());
+
+            if cli.dry_run {
+                println!("[DRY RUN] Would delete {} files", result.files.len());
+            } else {
+                let mut deleted = 0;
+                let mut failed = 0;
+                for file in &result.files {
+                    match std::fs::remove_file(&file.path) {
+                        Ok(()) => deleted += 1,
+                        Err(_) => failed += 1,
+                    }
+                }
+                println!("Deleted: {}", deleted);
+                println!("Failed: {}", failed);
+            }
+        }
+    }
+}
+
+/// Handle undo commands
+fn handle_undo(undo_cmd: &UndoCommands) {
+    match undo_cmd {
+        UndoCommands::Last { preview } => {
+            let mut manager = CheckpointManager::new().unwrap();
+
+            match manager.get_latest_checkpoint() {
+                Ok(Some(path)) => {
+                    let checkpoint = manager.load(&path).unwrap();
+
+                    if *preview {
+                        println!("Would restore from: {}", path.display());
+                        println!("Files to restore: {}", checkpoint.len());
+                        println!("Total size: {}", format_size(checkpoint.total_size()));
+                    } else {
+                        let result = manager.restore(&checkpoint, false);
+                        println!("Restored {} files ({} bytes)", result.files_restored, result.size_restored);
+                    }
+                }
+                Ok(None) => {
+                    println!("No checkpoints found");
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
+        }
+
+        UndoCommands::Checkpoint { checkpoint } => {
+            let mut manager = CheckpointManager::new().unwrap();
+            let result = manager.restore_file(checkpoint, false);
+
+            match result {
+                Ok(r) => {
+                    println!("Restored {} files", r.files_restored);
+                }
+                Err(e) => {
+                    println!("Error restoring: {}", e);
+                }
+            }
+        }
+
+        UndoCommands::List => {
+            let manager = CheckpointManager::new().unwrap();
+            match manager.list_checkpoints() {
+                Ok(checkpoints) => {
+                    if checkpoints.is_empty() {
+                        println!("No checkpoints found");
+                    } else {
+                        println!("Available checkpoints:");
+                        for (i, cp) in checkpoints.iter().enumerate() {
+                            println!("{}. {}", i + 1, cp.display());
+                        }
                     }
                 }
                 Err(e) => {
-                    println!("  Failed to load checkpoint: {}", e);
-                }
-            }
-        } else {
-            println!("Restoring files from checkpoint...");
-
-            let result = engine.undo(checkpoint_path.as_ref().map(|p| p.as_path()), false);
-
-            if result.files_restored > 0 {
-                println!("Successfully restored {} file(s)", result.files_restored);
-            }
-
-            if result.has_errors() {
-                println!();
-                println!("Errors:");
-                for error in &result.errors {
-                    println!("  - {}", error);
+                    println!("Error listing checkpoints: {}", e);
                 }
             }
         }
     }
 }
 
-/// Handles the status command
-fn handle_status(engine: &mut Engine, json: bool) {
-    let status = engine.status();
+/// Handle status commands
+fn handle_status(status_cmd: &StatusCommands) {
+    match status_cmd {
+        StatusCommands::System {} => {
+            let mut engine = Engine::new().unwrap();
+            let status = engine.status();
 
-    if json {
-        let mut lines: Vec<String> = Vec::new();
-        lines.push("{".to_string());
-        lines.push("  \"command\": \"status\",".to_string());
-        lines.push("  \"success\": true,".to_string());
-        lines.push("  \"system_info\": {".to_string());
-        lines.push(format!(
-            "    \"temp_directory_exists\": {},",
-            status.system_info.temp_dir_exists
-        ));
-        lines.push(format!(
-            "    \"temp_files_count\": {},",
-            status.system_info.temp_files_count
-        ));
-        lines.push(format!(
-            "    \"chrome_cache_exists\": {},",
-            status.system_info.chrome_cache_exists
-        ));
-        lines.push(format!(
-            "    \"edge_cache_exists\": {},",
-            status.system_info.edge_cache_exists
-        ));
-        lines.push(format!(
-            "    \"firefox_cache_exists\": {}",
-            status.system_info.firefox_cache_exists
-        ));
-        lines.push("  },".to_string());
-        lines.push("  \"checkpoints\": {".to_string());
-
-        if let Some(ref cp) = status.last_checkpoint {
-            lines.push(format!(
-                "    \"available\": {},",
-                status.available_checkpoints
-            ));
-            lines.push("    \"latest\": {".to_string());
-            lines.push(format!(
-                "      \"path\": \"{}\"",
-                escape_json_string(&cp.path)
-            ));
-            lines.push("    }".to_string());
-        } else {
-            lines.push(format!(
-                "    \"available\": {},",
-                status.available_checkpoints
-            ));
-            lines.push("    \"latest\": null".to_string());
-        }
-
-        lines.push("  }".to_string());
-        lines.push("}".to_string());
-
-        for line in &lines {
-            println!("{}", line);
-        }
-    } else {
-        println!("=== RigShift Status ===");
-        println!();
-
-        println!("System Information:");
-        println!(
-            "  Temp Directory: {}",
+            println!("\n=== System Status ===");
+            println!("Temp directory exists: {}", status.system_info.temp_dir_exists);
             if status.system_info.temp_dir_exists {
-                "Found"
-            } else {
-                "Not Found"
+                println!("Temp files count: {}", status.system_info.temp_files_count);
             }
-        );
-        println!(
-            "  Chrome Cache:   {}",
-            if status.system_info.chrome_cache_exists {
-                "Found"
-            } else {
-                "Not Found"
-            }
-        );
-        println!(
-            "  Edge Cache:     {}",
-            if status.system_info.edge_cache_exists {
-                "Found"
-            } else {
-                "Not Found"
-            }
-        );
-        println!(
-            "  Firefox Cache:  {}",
-            if status.system_info.firefox_cache_exists {
-                "Found"
-            } else {
-                "Not Found"
-            }
-        );
-        println!();
+            println!("Chrome cache exists: {}", status.system_info.chrome_cache_exists);
+            println!("Edge cache exists: {}", status.system_info.edge_cache_exists);
+            println!("Firefox cache exists: {}", status.system_info.firefox_cache_exists);
 
-        println!("Checkpoints:");
-        println!("  Available: {}", status.available_checkpoints);
+            println!("\nCheckpoints:");
+            println!("  Available: {}", status.available_checkpoints);
+            if let Some(cp) = &status.last_checkpoint {
+                println!("  Latest: {}", cp.path);
+                println!("  Created: {}", cp.created_at);
+                println!("  Files: {}", cp.file_count);
+            }
+        }
 
-        if let Some(cp) = status.last_checkpoint {
-            println!();
-            println!("Latest Checkpoint:");
-            println!("  Path:        {}", cp.path);
-            println!("  Files:       {}", cp.file_count);
-            println!("  Total Size:  {}", format_size(cp.total_size));
-            println!("  Description: {}", cp.description);
-        } else {
-            println!("  No checkpoints available.");
+        StatusCommands::Checkpoints {} => {
+            let manager = CheckpointManager::new().unwrap();
+            match manager.list_checkpoints() {
+                Ok(checkpoints) => {
+                    println!("\n=== Checkpoints ===");
+                    println!("Total: {}", checkpoints.len());
+
+                    for cp in checkpoints {
+                        if let Ok(loaded) = manager.load(&cp) {
+                            println!("\n{}", cp.display());
+                            println!("  Files: {}", loaded.len());
+                            println!("  Size: {}", format_size(loaded.total_size()));
+                            println!("  Description: {}", loaded.description);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
+        }
+
+        StatusCommands::Temp {} => {
+            let scanner = Scanner::new();
+            let results = scanner.scan();
+
+            println!("\n=== Temporary Files Status ===");
+            println!("Total files: {}", results.len());
+            println!("Total size: {}", format_size(Scanner::calculate_total_size(&results)));
+        }
+
+        StatusCommands::Startup {} => {
+            let manager = StartupManager::new();
+            let result = manager.scan();
+
+            println!("\n=== Startup Status ===");
+            println!("Total items: {}", result.total_count);
+            println!("Enabled: {}", result.enabled_count);
+            println!("Estimated boot impact: {}", result.estimated_impact);
+        }
+
+        StatusCommands::Services {} => {
+            let optimizer = ServiceOptimizer::new();
+            let result = optimizer.scan();
+
+            println!("\n=== Services Status ===");
+            println!("Total services: {}", result.services.len());
+            println!("Running: {}", result.running_count);
+            println!("Optimizable: {}", result.optimizable_services.len());
+        }
+
+        StatusCommands::Privacy {} => {
+            let mut manager = PrivacyManager::new();
+            let result = manager.scan();
+
+            println!("\n=== Privacy Status ===");
+            println!("Privacy score: {}/100", result.privacy_score);
+            println!("Risk level: {:?}", result.risk_level);
+            println!("Settings needing attention: {}", result.improvable_count);
         }
     }
 }
 
-/// Main entry point
-fn main() {
-    let cli = Cli::parse();
-    let scanner = Scanner::new();
+/// Handle registry commands
+fn handle_registry(cli: &Cli, cmd: &RegistryCommands) {
+    match cmd {
+        RegistryCommands::Scan { include_uninstallers, include_extensions, safe_mode } => {
+            let mut scanner = RegistryScanner::new()
+                .with_safe_mode(*safe_mode)
+                .with_broken_uninstallers(*include_uninstallers)
+                .with_orphaned_extensions(*include_extensions);
 
-    let mut engine = match Engine::new() {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Error initializing engine: {}", e);
-            if cli.json {
-                println!("{{");
-                println!("  \"success\": false,");
-                println!("  \"error\": \"{}\"", escape_json_string(&e.to_string()));
-                println!("}}");
-            }
-            process::exit(1);
+            let result = scanner.scan();
+            println!("\n=== Registry Scan ===");
+            println!("{}", result);
         }
-    };
 
-    engine.set_dry_run(cli.dry_run);
+        RegistryCommands::Clean { checkpoint, include_uninstallers, include_extensions } => {
+            let scanner = RegistryScanner::new();
+            let scan_result = scanner.scan();
 
-    match &cli.command {
-        Commands::Scan => handle_scan(&scanner, cli.dry_run, cli.json),
-        Commands::Apply => handle_apply(&scanner, &mut engine, cli.dry_run, cli.json),
-        Commands::Undo => handle_undo(&mut engine, cli.dry_run, cli.json),
-        Commands::Status => handle_status(&mut engine, cli.json),
+            let cleaner = RegistryCleanup::new();
+            let result = cleaner.clean(&scan_result.findings, *checkpoint);
+
+            println!("\n=== Registry Cleanup ===");
+            println!("{}", result);
+        }
+
+        RegistryCommands::Backup => {
+            println!("Registry backup is automatically created as checkpoints before cleanup operations.");
+            println!("Use 'rigshift undo list' to see available restore points.");
+        }
     }
 }
 
-// Module declarations
-mod checkpoint;
-mod engine;
-mod scanner;
+/// Handle startup commands
+fn handle_startup(cli: &Cli, cmd: &StartupCommands) {
+    match cmd {
+        StartupCommands::Scan {} | StartupCommands::List {} => {
+            let manager = StartupManager::new();
+            let result = manager.scan();
+            println!("\n=== Startup Programs ===");
+            println!("{}", result);
+        }
+
+        StartupCommands::Disable { high_impact, all, program } => {
+            let manager = StartupManager::new();
+            let scan_result = manager.scan();
+
+            let to_disable: Vec<&startup::StartupItem> = if *high_impact {
+                manager.get_high_impact_items(&scan_result)
+            } else if !program.is_empty() {
+                scan_result.items.iter()
+                    .filter(|i| program.iter().any(|p| i.name.to_lowercase().contains(&p.to_lowercase())))
+                    .collect()
+            } else if *all {
+                scan_result.items.iter().filter(|i| i.is_enabled).collect()
+            } else {
+                Vec::new()
+            };
+
+            if cli.dry_run {
+                println!("[DRY RUN] Would disable {} programs", to_disable.len());
+            } else {
+                let result = manager.disable_multiple(&to_disable, true);
+                println!("\n=== Disable Startup Items ===");
+                println!("{}", result);
+            }
+        }
+
+        StartupCommands::Enable { program: _ } => {
+            println!("Enable functionality requires checkpoint restoration. Use 'rigshift undo' to restore.");
+        }
+    }
+}
+
+/// Handle services commands
+fn handle_services(cli: &Cli, cmd: &ServicesCommands) {
+    match cmd {
+        ServicesCommands::Scan {} | ServicesCommands::List {} => {
+            let optimizer = ServiceOptimizer::new();
+            let result = optimizer.scan();
+            println!("\n=== Services Scan ===");
+            println!("{}", result);
+        }
+
+        ServicesCommands::Disable { safe, all, service } => {
+            let optimizer = ServiceOptimizer::new();
+            let scan_result = optimizer.scan();
+
+            let to_disable: Vec<&services::ServiceInfo> = if *safe {
+                optimizer.get_safe_services(&scan_result)
+            } else if *all {
+                optimizer.get_recommended_disable(&scan_result)
+            } else if !service.is_empty() {
+                scan_result.services.iter()
+                    .filter(|i| service.iter().any(|s| i.name.to_lowercase().contains(&s.to_lowercase())))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            if cli.dry_run {
+                println!("[DRY RUN] Would disable {} services", to_disable.len());
+            } else {
+                let names: Vec<&str> = to_disable.iter().map(|s| s.name.as_str()).collect();
+                let result = optimizer.disable_multiple(&names);
+                println!("\n=== Disable Services ===");
+                println!("{}", result);
+            }
+        }
+
+        ServicesCommands::Info { name } => {
+            let optimizer = ServiceOptimizer::new();
+            let scan_result = optimizer.scan();
+
+            if let Some(svc) = scan_result.services.iter().find(|s| s.name.to_lowercase() == name.to_lowercase()) {
+                println!("\n=== Service Info: {} ===", svc.name);
+                println!("Display Name: {}", svc.display_name);
+                println!("Description: {}", svc.description);
+                println!("Status: {:?}", svc.status);
+                println!("Startup Type: {:?}", svc.startup_type);
+                println!("Safety Level: {:?}", svc.safety_level);
+                println!("Impact: {:?}", svc.impact);
+            } else {
+                println!("Service not found: {}", name);
+            }
+        }
+    }
+}
+
+/// Handle large files commands
+fn handle_large_files(cli: &Cli, cmd: &LargeFilesCommands) {
+    match cmd {
+        LargeFilesCommands::Scan { min_size, drive, video, images, archives, games } => {
+            let mut finder = LargeFileFinder::new();
+            let _ = finder.with_min_size_str(min_size);
+
+            let scan_path = match drive {
+                Some(d) => PathBuf::from(d),
+                None => PathBuf::from("C:\\"),
+            };
+
+            let result = finder.scan_directory(&scan_path);
+
+            println!("\n=== Large Files Scan ===");
+            println!("{}", result);
+        }
+
+        LargeFilesCommands::Largest { count } => {
+            let mut finder = LargeFileFinder::new();
+            let _ = finder.with_min_size_str("1MB");
+
+            let result = finder.scan_directory(&PathBuf::from("C:\\"));
+            let largest = finder.get_largest(&result, *count);
+
+            println!("\n=== Largest Files ===");
+            for (i, file) in largest.iter().enumerate() {
+                println!("{}. {} - {} ({})", i + 1, file.name, file.size_formatted, file.path.display());
+            }
+        }
+
+        LargeFilesCommands::Oldest { days } => {
+            let mut finder = LargeFileFinder::new();
+            let _ = finder.with_min_size_str("1MB");
+
+            let result = finder.scan_directory(&PathBuf::from("C:\\"));
+            let oldest = finder.get_oldest(&result, *days);
+
+            println!("\n=== Oldest Files (>{} days) ===", days);
+            for (i, file) in oldest.iter().enumerate() {
+                println!("{}. {} - {} ({} days old)", i + 1, file.name, file.size_formatted, file.age_days);
+            }
+        }
+    }
+}
+
+/// Handle uninstall commands
+fn handle_uninstall(cli: &Cli, cmd: &UninstallCommands) {
+    match cmd {
+        UninstallCommands::List {} | UninstallCommands::Scan {} => {
+            let uninstaller = Uninstaller::new();
+            let result = uninstaller.scan_programs();
+            println!("\n=== Installed Programs ===");
+            println!("{}", result);
+        }
+
+        UninstallCommands::Leftovers { program } => {
+            let uninstaller = Uninstaller::new();
+            let scan_result = uninstaller.scan_programs();
+
+            if let Some(pg) = scan_result.programs.iter().find(|p| p.display_name.to_lowercase().contains(&program.to_lowercase())) {
+                let leftovers = uninstaller.analyze_leftovers(pg);
+                println!("\n=== Leftovers for: {} ===", pg.display_name);
+                println!("{}", leftovers);
+            } else {
+                println!("Program not found: {}", program);
+            }
+        }
+
+        UninstallCommands::Clean { all, remove:

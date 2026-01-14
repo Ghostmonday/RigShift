@@ -1,12 +1,36 @@
 [package]
 name = "rigshift"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
-description = "Windows system optimization CLI tool"
+description = "Complete Windows System Optimization CLI Tool"
 authors = ["RigShift"]
 
 [dependencies]
+# CLI parsing
 clap = { version = "4.4", features = ["derive"] }
+
+# Windows registry access for startup manager, registry cleaning, and telemetry blocking
+winreg = "0.52"
+
+# Windows API bindings for services and advanced system operations
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_SystemServices",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_System_Ole",
+] }
+
+# JSON serialization for checkpoints and results
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Parallel scanning for better performance
+rayon = "1.8"
+
+# Human-readable file size formatting
+human_bytes = "0.4"
 
 [profile.release]
 opt-level = 3
@@ -15,3 +39,4 @@ strip = true
 
 [package.metadata.winpackage]
 product_name = "RigShift"
+manufacturer = "RigShift"
