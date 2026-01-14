@@ -12,6 +12,7 @@ use std::process;
 mod checkpoint;
 mod engine;
 mod scanner;
+mod universal_checkpoint;
 
 // New feature modules
 mod registry;
@@ -33,6 +34,18 @@ use services::{ServiceOptimizer, ServiceScanResult, ServiceModifyResult};
 use large_files::{LargeFileFinder, LargeFileScanResult, FileCategory};
 use uninstaller::{Uninstaller, ProgramScanResult, LeftoverAnalysis};
 use privacy::{PrivacyManager, PrivacyScanResult, PrivacyApplyResult};
+
+// Universal checkpoint system
+use universal_checkpoint::{
+    UniversalCheckpointManager,
+    CheckpointType,
+    BackupEntry,
+    BackupData,
+    EntryType,
+    CheckpointResult,
+    RestoreCheckpointResult,
+    CheckpointInfo,
+};
 
 /// The main CLI struct parsed by clap
 #[derive(Parser)]
