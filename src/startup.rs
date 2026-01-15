@@ -459,6 +459,7 @@ impl StartupManager {
 
     /// Resolve a .lnk shortcut to its target
     fn resolve_lnk_target(&self, lnk_path: &Path) -> Option<std::path::PathBuf> {
+        // AUDIT: [Functionality] - This is a placeholder. LNK resolution should use ShellLink COM interface.
         // Use COM to resolve the shortcut
         // For simplicity, we'll try to extract the path from the lnk file
         // In a full implementation, you would use the IShellLink COM interface
@@ -477,6 +478,7 @@ impl StartupManager {
 
     /// Scan scheduled tasks (basic implementation)
     fn scan_scheduled_tasks(&self, _items: &mut Vec<StartupItem>) {
+        // AUDIT: [Functionality] - Missing implementation for scheduled tasks.
         // Scheduled task scanning would require the Task Scheduler COM interface
         // or PowerShell execution. This is a placeholder for the full implementation.
         // A full implementation would query \Microsoft\Windows\Startup folder tasks
@@ -581,6 +583,7 @@ impl StartupManager {
 
     /// Check digital signature of a file
     fn check_signature(&self, _path: &str) -> SignatureStatus {
+        // AUDIT: [Functionality] - Missing implementation for digital signature verification.
         // Digital signature checking requires WinVerifyTrust API
         // This is a placeholder that would be implemented with Windows API calls
         SignatureStatus::Unknown
@@ -786,6 +789,7 @@ impl StartupManager {
         };
 
         let key = RegKey::predef(hkey).open_subkey_with_flags(key_path, KEY_WRITE)?;
+        // AUDIT: [Safety] - Should backup the value to UniversalCheckpointManager before deleting.
         key.delete_value(&item.name)?;
 
         Ok(())
@@ -846,6 +850,7 @@ impl StartupManager {
 
     /// Enable a disabled startup item
     pub fn enable(&self, item: &StartupItem, _from_checkpoint: bool) -> StartupModifyResult {
+        // AUDIT: [Functionality] - Missing implementation for enabling/restoring startup items.
         let mut result = StartupModifyResult::default();
 
         // Implementation would restore from checkpoint or recreate the entry

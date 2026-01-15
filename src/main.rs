@@ -28,6 +28,7 @@ use engine::{Engine, ApplyResult, UndoResult};
 use scanner::{FileType, Scanner, ScanResult};
 
 // New feature exports
+// AUDIT: [Consistency] - RegistryCleanup is used in the code but RegistryCleaner is exported here.
 use registry::{RegistryScanner, RegistryCleaner, RegistryScanResult, RegistryCleanupResult};
 use startup::{StartupManager, StartupScanResult, StartupModifyResult};
 use services::{ServiceOptimizer, ServiceScanResult, ServiceModifyResult};
@@ -115,6 +116,7 @@ enum Commands {
     Privacy(PrivacyCommands),
 
     /// Run all optimizations (comprehensive system tune-up)
+    // AUDIT: [Functionality] - Subcommands like 'optimize' should ideally use the UniversalCheckpoint system for an all-or-nothing rollback.
     #[command(name = "optimize")]
     Optimize {
         /// Include registry cleaning (requires admin)
@@ -790,6 +792,7 @@ fn handle_apply(cli: &Cli, apply_cmd: &ApplyCommands) {
                     println!("  - {}", finding.key_path);
                 }
             } else {
+                // AUDIT: [Quality/Bugs] - This uses RegistryCleanup::new() but the export was RegistryCleaner.
                 let cleaner = RegistryCleanup::new();
                 let safe_findings: Vec<_> = if *force {
                     scan_result.findings.clone()

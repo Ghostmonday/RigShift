@@ -183,6 +183,8 @@ impl RegistryScanner {
             self.scan_orphaned_com(&mut result);
         }
 
+        // AUDIT: [Safety] - Safe mode filtering should be more granular.
+        // Some "safe" findings might still be disruptive.
         // Filter out high-risk findings in safe mode
         if self.safe_mode {
             result.findings.retain(|f| f.is_safe);
@@ -247,6 +249,8 @@ impl RegistryScanner {
         if let Ok(key) = RegKey::predef(hive).open_subkey_with_flags(path, KEY_READ) {
             if let Ok(subkeys) = key.enum_keys() {
                 for subkey_name in subkeys.flatten() {
+                    // AUDIT: [Quality/Safety] - Generic error catch-all here.
+                    // Opening a key could fail due to permissions, not just invalidness.
                     // Try to open each subkey - if it fails, it's invalid
                     if let Err(_) = key.open_subkey(&subkey_name) {
                         result.findings.push(RegistryFinding {
@@ -306,6 +310,7 @@ impl RegistryScanner {
                                 if let Ok(uninstall_str) =
                                     subkey.get_value::<String, _>("UninstallString")
                                 {
+                                    // AUDIT: [Functionality] - is_uninstall_command_valid needs to handle env vars (%ProgramFiles%, etc).
                                     if !self.is_uninstall_command_valid(&uninstall_str) {
                                         result.findings.push(RegistryFinding {
                                             finding_type: FindingType::BrokenUninstaller,
@@ -524,6 +529,7 @@ impl RegistryCleanup {
         result
     }
 
+    // AUDIT: [Safety] - Should use UniversalCheckpointManager instead of the internal placeholder.
     /// Delete a registry key safely
     fn delete_registry_key(&self, key_path: &str) -> Result<(), Box<dyn Error>> {
         // Parse the path to get hive and subkey
@@ -538,6 +544,7 @@ impl RegistryCleanup {
             _ => return Err("Unknown hive".into()),
         };
 
+        // AUDIT: [Bug] - This will fail for keys immediately under a hive (e.g., HKLM\MyKey).
         // Open parent key and delete subkey
         let parent_path = match subkey.rfind('\\') {
             Some(idx) => &subkey[..idx],
@@ -548,6 +555,7 @@ impl RegistryCleanup {
 
         let parent_key =
             RegKey::predef(hkey).open_subkey_with_flags(parent_path, KEY_WRITE | KEY_READ)?;
+        // AUDIT: [Safety] - delete_subkey is not recursive and will fail if the key has subkeys.
         parent_key.delete_subkey(subkey_name)?;
 
         Ok(())
@@ -585,6 +593,7 @@ impl RegistryCleanup {
             backup_entries: Vec::new(),
         };
 
+        // AUDIT: [Critical] - This is a placeholder and does not actually back up registry data.
         // In a real implementation, we would backup each key before deletion
         // For now, we just return a placeholder
         Some(format!("checkpoint_registry_{}.json", timestamp))

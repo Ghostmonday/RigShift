@@ -546,6 +546,7 @@ _err() {
                    if result.is return Ok(services);
         }
 
+        // AUDIT: [Critical] - Buffer parsing is completely missing. This function returns an empty vector.
         // Parse the buffer (simplified - in production you'd parse the SERVICE_STATUS structs)
         // For now, we'll use a simpler approach with registry
 
@@ -554,6 +555,7 @@ _err() {
 
     /// Get detailed information about a service
     fn get_service_info(&self, service_name: &str) -> Result<ServiceInfo, Box<dyn Error>> {
+        // AUDIT: [Critical] - This function returns a default object and doesn't actually query service details.
         // Try to get info from registry as fallback
         let key_path = format!(
             r"SYSTEM\CurrentControlSet\Services\{}",
@@ -670,7 +672,8 @@ _err() {
     /// Disable a service
     pub fn disable(&self, service_name: &str) -> Result<ServiceModifyResult, Box<dyn Error>> {
         let mut result = ServiceModifyResult::default();
-
+        // AUDIT: [Critical] - This is a placeholder and does NOT actually disable the service.
+ 
         // Check if essential
         if self.essential_services.contains(&service_name) {
             result.errors.push(format!(

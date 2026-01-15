@@ -596,6 +596,7 @@ impl PrivacyManager {
                     setting.original_value = Some(setting.current_value.clone());
                 }
 
+                // AUDIT: [Quality] - The apply_setting function uses RegKey::open_subkey_with_flags which will fail if the subkey doesn't exist.
                 // Apply the change
                 let change_result = self.apply_setting(setting);
 
@@ -630,6 +631,8 @@ impl PrivacyManager {
             }
         }
 
+        // AUDIT: [Safety] - The original values are stored in the object but NEVER written to disk in a checkpoint file.
+        // If the app closes, the ability to undo is lost despite claiming a checkpoint was created.
         result
     }
 
@@ -699,6 +702,7 @@ impl PrivacyManager {
 
     /// Restore from checkpoint
     pub fn restore(&self, checkpoint_path: &str) -> Result<PrivacyApplyResult, Box<dyn Error>> {
+        // AUDIT: [Critical] - This is a placeholder and does NOT actually restore any registry values.
         let mut result = PrivacyApplyResult::default();
 
         // Read checkpoint file
